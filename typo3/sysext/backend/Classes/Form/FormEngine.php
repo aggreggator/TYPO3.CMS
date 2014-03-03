@@ -2340,8 +2340,10 @@ TBE_EDITOR.customEvalFunctions[\'' . $evalData . '\'] = function(value) {
 			$size = (int)$config['size'];
 			$size = $config['autoSizeMax'] ? MathUtility::forceIntegerInRange(count($itemArray) + 1, MathUtility::forceIntegerInRange($size, 1), $config['autoSizeMax']) : $size;
 			$sOnChange = implode('', $PA['fieldChangeFunc']);
+
+			$multiSelectId = uniqid('tceforms-multiselect-');
 			$itemsToSelect = '
-				<select data-relatedfieldname="' . $PA['itemFormElName'] . '" data-exclusivevalues="' . $config['exclusiveKeys'] . '" id="' . uniqid('tceforms-multiselect-') . '" name="' . $PA['itemFormElName'] . '_sel"' . $this->insertDefStyle('select', 'tceforms-multiselect tceforms-itemstoselect t3-form-select-itemstoselect') . ($size ? ' size="' . $size . '"' : '') . ' onchange="' . htmlspecialchars($sOnChange) . '"' . $PA['onFocus'] . $selector_itemListStyle . '>
+				<select data-relatedfieldname="' . htmlspecialchars($PA['itemFormElName']) . '" data-exclusivevalues="' . htmlspecialchars($config['exclusiveKeys']) . '" id="' . $multiSelectId . '" name="' . $PA['itemFormElName'] . '_sel"' . $this->insertDefStyle('select', 'tceforms-multiselect tceforms-itemstoselect t3-form-select-itemstoselect') . ($size ? ' size="' . $size . '"' : '') . ' onchange="' . htmlspecialchars($sOnChange) . '"' . $PA['onFocus'] . $selector_itemListStyle . '>
 					' . implode('
 					', $opt) . '
 				</select>';
@@ -4156,7 +4158,18 @@ TBE_EDITOR.customEvalFunctions[\'' . $evalData . '\'] = function(value) {
 								$params['md5ID'] = $md5ID;
 								$params['returnUrl'] = $this->thisReturnUrl();
 								// Resolving script filename and setting URL.
-								if (isset($wConf['script'])) {
+								if (isset($wConf['module']['name'])) {
+									$urlParameters = array();
+									if (isset($wConf['module']['urlParameters']) && is_array($wConf['module']['urlParameters'])) {
+										$urlParameters = $wConf['module']['urlParameters'];
+									}
+									$wScript = BackendUtility::getModuleUrl($wConf['module']['name'], $urlParameters);
+								} elseif (isset($wConf['script'])) {
+									GeneralUtility::deprecationLog(
+										'The way registering a wizard in TCA has changed in 6.2. '
+										. 'Please set module[name]=module_name instead of using script=path/to/sctipt.php in your TCA. '
+										. 'The possibility to register wizards this way will be removed in 2 versions.'
+									);
 									if (substr($wConf['script'], 0, 4) === 'EXT:') {
 										$wScript = GeneralUtility::getFileAbsFileName($wConf['script']);
 										if ($wScript) {
@@ -4166,25 +4179,36 @@ TBE_EDITOR.customEvalFunctions[\'' . $evalData . '\'] = function(value) {
 											break;
 										}
 									} else {
-										$wScript = $wConf['script'];
+										$parsedWizardUrl = parse_url($wConf['script']);
+										if (in_array($parsedWizardUrl['path'], array(
+													'wizard_add.php',
+													'wizard_colorpicker.php',
+													'wizard_edit.php',
+													'wizard_forms.php',
+													'wizard_list.php',
+													'wizard_rte.php',
+													'wizard_table.php',
+												))
+										) {
+											$urlParameters = array();
+											if (isset($parsedWizardUrl['query'])) {
+												 parse_str($parsedWizardUrl['query'], $urlParameters);
+											}
+											$moduleName = str_replace('.php', '', $parsedWizardUrl['path']);
+											$wScript = BackendUtility::getModuleUrl($moduleName, $urlParameters);
+											unset($moduleName, $urlParameters, $parsedWizardUrl);
+										} else {
+											$wScript = $wConf['script'];
+										}
 									}
-								} elseif (isset($wConf['module']['name'])) {
-									$urlParameters = array();
-									if (isset($wConf['module']['urlParameters']) && is_array($wConf['module']['urlParameters'])) {
-										$urlParameters = $wConf['module']['urlParameters'];
-									}
-									$wScript = BackendUtility::getModuleUrl($wConf['module']['name'], $urlParameters);
-								} else {
+								} elseif (in_array($wConf['type'], array('script', 'colorbox', 'popup'), TRUE)) {
 									// Illeagal configuration, fail silently
 									break;
 								}
+
 								$url = $this->backPath . $wScript . (strstr($wScript, '?') ? '' : '?');
-								// If there is no script and the type is "colorbox", break right away:
-								if ((string) $wConf['type'] == 'colorbox' && !$wConf['script']) {
-									break;
-								}
 								// If "script" type, create the links around the icon:
-								if ((string) $wConf['type'] == 'script') {
+								if ((string) $wConf['type'] === 'script') {
 									$aUrl = $url . GeneralUtility::implodeArrayForUrl('', array('P' => $params));
 									$outArr[] = '<a href="' . htmlspecialchars($aUrl) . '" onclick="this.blur(); return !TBE_EDITOR.isFormChanged();">' . $icon . '</a>';
 								} else {
@@ -4195,37 +4219,37 @@ TBE_EDITOR.customEvalFunctions[\'' . $evalData . '\'] = function(value) {
 									$params['fieldChangeFunc'] = $fieldChangeFunc;
 									$params['fieldChangeFuncHash'] = GeneralUtility::hmac(serialize($fieldChangeFunc));
 									switch ((string) $wConf['type']) {
-									case 'popup':
-
-									case 'colorbox':
-										// Current form value is passed as P[currentValue]!
-										$addJS = $wConf['popup_onlyOpenIfSelected'] ? 'if (!TBE_EDITOR.curSelected(\'' . $itemName . $listFlag . '\')){alert(' . GeneralUtility::quoteJSvalue($this->getLL('m_noSelItemForEdit')) . '); return false;}' : '';
-										$curSelectedValues = '+\'&P[currentSelectedValues]=\'+TBE_EDITOR.curSelected(\'' . $itemName . $listFlag . '\')';
-										$aOnClick = 'this.blur();' . $addJS . 'vHWin=window.open(\'' . $url . GeneralUtility::implodeArrayForUrl('', array('P' => $params)) . '\'+\'&P[currentValue]=\'+TBE_EDITOR.rawurlencode(' . $this->elName($itemName) . '.value,200)' . $curSelectedValues . ',\'popUp' . $md5ID . '\',\'' . $wConf['JSopenParams'] . '\');' . 'vHWin.focus();return false;';
-										// Setting "colorBoxLinks" - user LATER to wrap around the color box as well:
-										$colorBoxLinks = array('<a href="#" onclick="' . htmlspecialchars($aOnClick) . '">', '</a>');
-										if ((string) $wConf['type'] == 'popup') {
-											$outArr[] = $colorBoxLinks[0] . $icon . $colorBoxLinks[1];
-										}
-										break;
-									case 'userFunc':
-										// Reference set!
-										$params['item'] = &$item;
-										$params['icon'] = $icon;
-										$params['iTitle'] = $iTitle;
-										$params['wConf'] = $wConf;
-										$params['row'] = $row;
-										$outArr[] = GeneralUtility::callUserFunction($wConf['userFunc'], $params, $this);
-										break;
-									case 'slider':
-										// Reference set!
-										$params['item'] = &$item;
-										$params['icon'] = $icon;
-										$params['iTitle'] = $iTitle;
-										$params['wConf'] = $wConf;
-										$params['row'] = $row;
-										$wizard = GeneralUtility::makeInstance('TYPO3\\CMS\\Backend\\Form\\Element\\ValueSlider');
-										$outArr[] = call_user_func_array(array(&$wizard, 'renderWizard'), array(&$params, &$this));
+										case 'popup':
+										case 'colorbox':
+											// Current form value is passed as P[currentValue]!
+											$addJS = $wConf['popup_onlyOpenIfSelected'] ? 'if (!TBE_EDITOR.curSelected(\'' . $itemName . $listFlag . '\')){alert(' . GeneralUtility::quoteJSvalue($this->getLL('m_noSelItemForEdit')) . '); return false;}' : '';
+											$curSelectedValues = '+\'&P[currentSelectedValues]=\'+TBE_EDITOR.curSelected(\'' . $itemName . $listFlag . '\')';
+											$aOnClick = 'this.blur();' . $addJS . 'vHWin=window.open(\'' . $url . GeneralUtility::implodeArrayForUrl('', array('P' => $params)) . '\'+\'&P[currentValue]=\'+TBE_EDITOR.rawurlencode(' . $this->elName($itemName) . '.value,200)' . $curSelectedValues . ',\'popUp' . $md5ID . '\',\'' . $wConf['JSopenParams'] . '\');' . 'vHWin.focus();return false;';
+											// Setting "colorBoxLinks" - user LATER to wrap around the color box as well:
+											$colorBoxLinks = array('<a href="#" onclick="' . htmlspecialchars($aOnClick) . '">', '</a>');
+											if ((string) $wConf['type'] == 'popup') {
+												$outArr[] = $colorBoxLinks[0] . $icon . $colorBoxLinks[1];
+											}
+											break;
+										case 'userFunc':
+											// Reference set!
+											$params['item'] = &$item;
+											$params['icon'] = $icon;
+											$params['iTitle'] = $iTitle;
+											$params['wConf'] = $wConf;
+											$params['row'] = $row;
+											$outArr[] = GeneralUtility::callUserFunction($wConf['userFunc'], $params, $this);
+											break;
+										case 'slider':
+											// Reference set!
+											$params['item'] = &$item;
+											$params['icon'] = $icon;
+											$params['iTitle'] = $iTitle;
+											$params['wConf'] = $wConf;
+											$params['row'] = $row;
+											$wizard = GeneralUtility::makeInstance('TYPO3\\CMS\\Backend\\Form\\Element\\ValueSlider');
+											$outArr[] = call_user_func_array(array(&$wizard, 'renderWizard'), array(&$params, &$this));
+											break;
 									}
 								}
 								// Hide the real form element?
@@ -4271,7 +4295,7 @@ TBE_EDITOR.customEvalFunctions[\'' . $evalData . '\'] = function(value) {
 							break;
 					}
 					// Color wizard colorbox:
-					if ((string) $wConf['type'] == 'colorbox') {
+					if ((string) $wConf['type'] === 'colorbox') {
 						$dim = GeneralUtility::intExplode('x', $wConf['dim']);
 						$dX = MathUtility::forceIntegerInRange($dim[0], 1, 200, 20);
 						$dY = MathUtility::forceIntegerInRange($dim[1], 1, 200, 20);
